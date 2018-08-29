@@ -1,7 +1,6 @@
 from __future__ import print_function
 import os
 import pkgutil
-from pprint import pprint
 from .core import Scannable, LogFileOutput, Parser, IniConfigFile  # noqa: F401
 from .core import FileListing, LegacyItemAccess, SysconfigOptions  # noqa: F401
 from .core import YAMLParser, JSONParser, XMLParser, CommandParser  # noqa: F401
@@ -9,7 +8,6 @@ from .core import AttributeDict  # noqa: F401
 from .core import Syslog  # noqa: F401
 from .core.archives import COMPRESSION_TYPES, extract  # noqa: F401
 from .core import dr  # noqa: F401
-from .core.cluster import process_cluster
 from .core.context import ClusterArchiveContext, HostContext, HostArchiveContext  # noqa: F401
 from .core.dr import SkipComponent  # noqa: F401
 from .core.hydration import create_context
@@ -17,6 +15,7 @@ from .core.plugins import combiner, fact, metadata, parser, rule  # noqa: F401
 from .core.plugins import datasource, condition, incident  # noqa: F401
 from .core.plugins import make_response, make_metadata, make_fingerprint  # noqa: F401
 from .core.filters import add_filter, apply_filters, get_filters  # noqa: F401
+from .formats import get_formatter
 from .parsers import get_active_lines  # noqa: F401
 from .util import defaults  # noqa: F401
 
@@ -51,8 +50,20 @@ def add_status(name, nvr, commit):
     RULES_STATUS[name] = {"version": nvr, "commit": commit}
 
 
-def _run(graph=None, root=None, run_context=HostContext,
-         archive_context=None, show_dropped=False, use_pandas=False):
+def process_dir(broker, root, graph, context, use_pandas=False):
+    ctx = create_context(root, context)
+
+    if isinstance(ctx, ClusterArchiveContext):
+        from .core.cluster import process_cluster
+        archives = [f for f in ctx.all_files if f.endswith(COMPRESSION_TYPES)]
+        return process_cluster(archives, use_pandas=use_pandas, broker=broker)
+
+    broker[ctx.__class__] = ctx
+    broker = dr.run(graph, broker=broker)
+    return broker
+
+
+def _run(broker, graph=None, root=None, context=None, use_pandas=False):
     """
     run is a general interface that is meant for stand alone scripts to use
     when executing insights components.
@@ -70,42 +81,17 @@ def _run(graph=None, root=None, run_context=HostContext,
     Returns:
         broker: object containing the result of the evaluation.
     """
-    broker = dr.Broker()
 
     if not root:
-        broker[run_context] = run_context()
+        context = context or HostContext
+        broker[context] = context()
         return dr.run(graph, broker=broker)
 
     if os.path.isdir(root):
-        ctx = create_context(root, archive_context)
-
-        if isinstance(ctx, ClusterArchiveContext):
-            archives = [f for f in ctx.all_files if f.endswith(COMPRESSION_TYPES)]
-            return process_cluster(archives, use_pandas=use_pandas)
-
-        broker[ctx.__class__] = ctx
-        return dr.run(graph, broker=broker)
-
-    with extract(root) as ex:
-        ctx = create_context(ex.tmp_dir, archive_context)
-        archive_context = ctx.__class__
-        broker = dr.Broker()
-        broker[archive_context] = ctx
-        result = dr.run(graph, broker=broker)
-        if not show_dropped:
-            return result
-
-        ds = broker.get_by_type(datasource)
-        vals = []
-        for v in ds.values():
-            if isinstance(v, list):
-                vals.extend(d.path for d in v)
-            else:
-                vals.append(v.path)
-        dropped = set(ctx.all_files) - set(vals)
-        pprint("Dropped Files:")
-        pprint(dropped, indent=4)
-        return result
+        return process_dir(broker, root, graph, context, use_pandas)
+    else:
+        with extract(root) as ex:
+            return process_dir(broker, ex.tmp_dir, graph, context, use_pandas)
 
 
 def _load_context(path):
@@ -117,81 +103,74 @@ def _load_context(path):
     return dr.get_component(path)
 
 
-def describe(broker, show_missing=False, show_tracebacks=False):
-    if show_missing and broker.missing_requirements:
-        print()
-        print("Missing Requirements:")
-        if broker.missing_requirements:
-            print(broker.missing_requirements)
-
-    if show_tracebacks and broker.tracebacks:
-        print()
-        print("Tracebacks:")
-        for t in broker.tracebacks.values():
-            print(t)
-
-    def printit(c, v):
-        name = dr.get_name(c)
-        print(name)
-        print('-' * len(name))
-        print(dr.to_str(c, v))
-        print()
-        print()
-
-    print()
-    for c in sorted(broker.get_by_type(rule), key=dr.get_name):
-        v = broker[c]
-        if v["type"] != "skip":
-            printit(c, v)
-
-
 def run(component=None, root=None, print_summary=False,
-        run_context=HostContext, archive_context=None, use_pandas=False,
+        context=None, use_pandas=False,
         print_component=None):
 
     from .core import dr
     dr.load_components("insights.specs.default")
     dr.load_components("insights.specs.insights_archive")
     dr.load_components("insights.specs.sos_archive")
+    dr.load_components("insights.specs.jdr_archive")
 
     args = None
+    formatter = None
     if print_summary:
         import argparse
         import logging
-        p = argparse.ArgumentParser()
-        p.add_argument("archive", nargs="?", help="Archive or directory to analyze")
-        p.add_argument("-p", "--plugins", default=[], nargs="*",
-                       help="package(s) or module(s) containing plugins to run.")
+        p = argparse.ArgumentParser(add_help=False)
+        p.add_argument("archive", nargs="?", help="Archive or directory to analyze.")
+        p.add_argument("-p", "--plugins", default="", help="Comma-separated list without spaces of package(s) or module(s) containing plugins.")
         p.add_argument("-v", "--verbose", help="Verbose output.", action="store_true")
-        p.add_argument("-q", "--quiet", help="Error output only.", action="store_true")
-        p.add_argument("-m", "--missing", help="Show missing requirements.", action="store_true")
-        p.add_argument("-t", "--tracebacks", help="Show stack traces.", action="store_true")
-        p.add_argument("-d", "--dropped", help="Show collected files that weren't processed.", action="store_true", default=False)
-        p.add_argument("--pandas", action="store_true", help="Use pandas dataframes with cluster rules")
-        p.add_argument("--rc", help="Run Context")
-        p.add_argument("--ac", help="Archive Context")
-        args = p.parse_args()
+        p.add_argument("-f", "--format", help="Output format.", default="insights.formats.text")
+        p.add_argument("-D", "--debug", help="Verbose debug output.", action="store_true")
+        p.add_argument("--context", help="Execution Context. Defaults to HostContext if an archive isn't passed.")
+        p.add_argument("--pandas", action="store_true", help="Use pandas dataframes with cluster rules.")
 
-        logging.basicConfig(level=logging.DEBUG if args.verbose else logging.ERROR if args.quiet else logging.INFO)
-        run_context = _load_context(args.rc) or run_context
-        archive_context = _load_context(args.ac) or archive_context
+        class Args(object):
+            pass
+
+        args = Args()
+        p.parse_known_args(namespace=args)
+        p = argparse.ArgumentParser(parents=[p])
+        args.format = "insights.formats._json" if args.format == "json" else args.format
+        args.format = "insights.formats._yaml" if args.format == "yaml" else args.format
+        fmt = args.format if "." in args.format else "insights.formats." + args.format
+        Formatter = dr.get_component(fmt)
+        if not Formatter:
+            dr.load_components(fmt, continue_on_error=False)
+            Formatter = get_formatter(fmt)
+        Formatter.configure(p)
+        p.parse_args(namespace=args)
+        formatter = Formatter(args)
+
+        logging.basicConfig(level=logging.DEBUG if args.debug else logging.INFO if args.verbose else logging.ERROR)
+        context = _load_context(args.context) or context
         use_pandas = args.pandas or use_pandas
 
         root = args.archive or root
         if root:
             root = os.path.realpath(root)
 
-        for path in args.plugins:
-            dr.load_components(path)
+        plugins = []
+        if args.plugins:
+            for path in args.plugins.split(","):
+                path = path.strip()
+                if path.endswith(".py"):
+                    path, _ = os.path.splitext(path)
+                path = path.rstrip("/").replace("/", ".")
+                plugins.append(path)
+
+        for p in plugins:
+            dr.load_components(p)
 
         if component is None:
             component = []
-            plugins = tuple(args.plugins)
+            plugins = tuple(plugins)
             for c in dr.DELEGATES:
                 if c.__module__.startswith(plugins):
                     component.append(c)
 
-    show_dropped = args.dropped if args else False
     if component:
         if not isinstance(component, (list, set)):
             component = [component]
@@ -201,14 +180,24 @@ def run(component=None, root=None, print_summary=False,
     else:
         graph = dr.COMPONENTS[dr.GROUPS.single]
 
-    broker = _run(graph, root, run_context=run_context, archive_context=archive_context, show_dropped=show_dropped, use_pandas=use_pandas)
+    broker = dr.Broker()
 
-    if print_summary:
-        describe(broker, show_missing=args.missing, show_tracebacks=args.tracebacks)
+    if formatter:
+        formatter.preprocess(broker)
+        broker = _run(broker, graph, root, context=context, use_pandas=use_pandas)
+        formatter.postprocess(broker)
     elif print_component:
+        broker = _run(broker, graph, root, context=context, use_pandas=use_pandas)
         broker.print_component(print_component)
+    else:
+        broker = _run(broker, graph, root, context=context, use_pandas=use_pandas)
+
     return broker
 
 
-if __name__ == "__main__":
+def main():
     run(print_summary=True)
+
+
+if __name__ == "__main__":
+    main()

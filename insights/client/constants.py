@@ -9,8 +9,9 @@ class InsightsConstants(object):
     package_path = os.path.dirname(
         os.path.dirname(os.path.abspath(__file__)))
     sleep_time = 300
+    command_blacklist = ('rm', 'kill', 'reboot', 'shutdown')
     default_conf_dir = '/etc/insights-client'
-    default_conf_file = '/etc/insights-client/insights-client.conf'
+    default_conf_file = os.path.join(default_conf_dir, 'insights-client.conf')
     user_agent = os.path.join(app_name, package_info["VERSION"])
     log_dir = os.path.join(os.sep, 'var', 'log', app_name)
     simple_find_replace_dir = '/etc/redhat-access-insights'
@@ -35,9 +36,6 @@ class InsightsConstants(object):
     core_etag_file = os.path.join(default_conf_dir, '.insights-core.etag')
     core_gpg_sig_etag_file = os.path.join(default_conf_dir, '.insights-core-gpg-sig.etag')
     last_upload_results_file = os.path.join(default_conf_dir, '.last-upload.results')
-    insights_ansible_facts_dir = os.path.join('/', 'etc', 'ansible', 'facts.d')
-    insights_ansible_facts_file = os.path.join(insights_ansible_facts_dir, 'insights.fact')
-    insights_ansible_machine_id_file = os.path.join(insights_ansible_facts_dir, 'insights_machine_id.fact')
     insights_core_lib_dir = os.path.join('/', 'var', 'lib', 'insights')
     insights_core_rpm = os.path.join(default_conf_dir, 'rpm.egg')
     insights_core_last_stable = os.path.join(insights_core_lib_dir, 'last_stable.egg')

@@ -41,6 +41,14 @@ insights.core.context
     :show-inheritance:
     :undoc-members:
 
+insights.core.filters
+---------------------
+
+.. automodule:: insights.core.filters
+    :members:
+    :show-inheritance:
+    :undoc-members:
+
 insights.core.plugins
 ---------------------
 
@@ -91,6 +99,13 @@ insights.specs.insights_archive
 insights.specs.sos_archive
 --------------------------
 .. automodule:: insights.specs.sos_archive
+    :members:
+    :show-inheritance:
+    :undoc-members:
+
+insights.specs.jdr_archive
+--------------------------
+.. automodule:: insights.specs.jdr_archive
     :members:
     :show-inheritance:
     :undoc-members:

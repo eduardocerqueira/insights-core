@@ -9,9 +9,12 @@ from . import archive
 import logging
 import copy
 import glob
+import six
+import shlex
 from subprocess import Popen, PIPE, STDOUT
 from tempfile import NamedTemporaryFile
 
+from insights.util import mangle
 from ..contrib.soscleaner import SOSCleaner
 from .utilities import _expand_paths
 from .constants import InsightsConstants as constants
@@ -38,6 +41,7 @@ class DataCollector(object):
         self.mountpoint = '/'
         if mountpoint:
             self.mountpoint = mountpoint
+        self.hostname_path = None
 
     def _write_branch_info(self, branch_info):
         logger.debug("Writing branch information to archive...")
@@ -63,6 +67,8 @@ class DataCollector(object):
         logger.debug("Return Code: %s", the_return_code)
         if the_return_code != 0:
             return []
+        if six.PY3:
+            stdout = stdout.decode('utf-8')
         return stdout.splitlines()
 
     def _parse_file_spec(self, spec):
@@ -106,6 +112,11 @@ class DataCollector(object):
             precmd_alias = spec['pre_command']
             try:
                 precmd = precmds[precmd_alias]
+
+                if set.intersection(set(shlex.split(precmd)),
+                                    constants.command_blacklist):
+                    raise RuntimeError("Command Blacklist: " + precmd)
+
                 args = self._run_pre_command(precmd)
                 logger.debug('Pre-command results: %s', args)
 
@@ -184,6 +195,11 @@ class DataCollector(object):
             return
 
         for c in conf['commands']:
+            # remember hostname archive path
+            if c.get('symbolic_name') == 'hostname':
+                self.hostname_path = os.path.join(
+                    'insights_commands', mangle.mangle_command(c['command']))
+
             if c['command'] in rm_conf.get('commands', []):
                 logger.warn("WARNING: Skipping command %s", c['command'])
             elif self.mountpoint == "/" or c.get("image"):
@@ -221,7 +237,8 @@ class DataCollector(object):
         """
         if self.config.obfuscate:
             cleaner = SOSCleaner(quiet=True)
-            clean_opts = CleanOptions(self.config, self.archive.tmp_dir, rm_conf)
+            clean_opts = CleanOptions(
+                self.config, self.archive.tmp_dir, rm_conf, self.hostname_path)
             fresh = cleaner.clean_report(clean_opts, self.archive.archive_dir)
             if clean_opts.keyword_file is not None:
                 os.remove(clean_opts.keyword_file.name)
@@ -233,7 +250,7 @@ class CleanOptions(object):
     """
     Options for soscleaner
     """
-    def __init__(self, config, tmp_dir, rm_conf):
+    def __init__(self, config, tmp_dir, rm_conf, hostname_path):
         self.report_dir = tmp_dir
         self.domains = []
         self.files = []
@@ -254,6 +271,7 @@ class CleanOptions(object):
                 pass
 
         if config.obfuscate_hostname:
-            self.hostname_path = "insights_commands/hostname"
+            # default to its original location
+            self.hostname_path = hostname_path or 'insights_commands/hostname'
         else:
             self.hostname_path = None

@@ -4,9 +4,9 @@ import logging
 import os
 import tempfile
 from contextlib import contextmanager
-from insights.util import content_type, fs, subproc
+from insights.util import fs, subproc
+from insights.util.content_type import from_file as content_type_from_file
 
-from insights.util.content_type import from_file
 logger = logging.getLogger(__name__)
 
 
@@ -30,10 +30,13 @@ class ZipExtractor(object):
     def __init__(self, timeout=None):
         self.content_type = "application/zip"
         self.timeout = timeout
+        self.tmp_dir = None
+        self.created_tmp_dir = False
 
-    def from_path(self, path, extract_dir=None):
+    def from_path(self, path, extract_dir=None, content_type=None):
         self.tmp_dir = tempfile.mkdtemp(prefix="insights-", dir=extract_dir)
-        command = "unzip -q -d %s %s" % (self.tmp_dir, path)
+        self.created_tmp_dir = True
+        command = "unzip -n -q -d %s %s" % (self.tmp_dir, path)
         subproc.call(command, timeout=self.timeout)
         return self
 
@@ -42,6 +45,7 @@ class TarExtractor(object):
 
     def __init__(self, timeout=None):
         self.timeout = timeout
+        self.tmp_dir = None
 
     TAR_FLAGS = {
         "application/x-xz": "-J",
@@ -51,24 +55,20 @@ class TarExtractor(object):
         "application/x-tar": ""
     }
 
-    def _assert_type(self, _input, is_buffer=False):
-        self.content_type = content_type.from_file(_input)
+    def _tar_flag_for_content_type(self, content_type):
+        flag = self.TAR_FLAGS.get(content_type)
+        if not flag:
+            raise InvalidContentType(content_type)
+        return flag
 
-        if self.content_type not in self.TAR_FLAGS:
-            raise InvalidContentType(self.content_type)
-
-        inner_type = content_type.from_file_inner(_input)
-
-        if inner_type != 'application/x-tar':
-            raise InvalidArchive('No compressed tar archive')
-
-    def from_path(self, path, extract_dir=None):
+    def from_path(self, path, extract_dir=None, content_type=None):
         if os.path.isdir(path):
             self.tmp_dir = path
         else:
-            self._assert_type(path, False)
-            tar_flag = self.TAR_FLAGS.get(self.content_type)
+            self.content_type = content_type or content_type_from_file(path)
+            tar_flag = self._tar_flag_for_content_type(self.content_type)
             self.tmp_dir = tempfile.mkdtemp(prefix="insights-", dir=extract_dir)
+            self.created_tmp_dir = True
             command = "tar %s -x --exclude=*/dev/null -f %s -C %s" % (tar_flag, path, self.tmp_dir)
             logging.debug("Extracting files in '%s'", self.tmp_dir)
             subproc.call(command, timeout=self.timeout)
@@ -92,18 +92,26 @@ class Extraction(object):
 
 
 @contextmanager
-def extract(path, timeout=None, extract_dir=None):
-    content_type = from_file(path)
+def extract(path, timeout=None, extract_dir=None, content_type=None):
+    """
+    Extract path into a temporary directory in `extract_dir`.
+
+    Yields an object containing the temporary path and the content type of the
+    original archive.
+
+    If the extraction takes longer than `timeout` seconds, the temporary path
+    is removed, and an exception is raised.
+    """
+    content_type = content_type or content_type_from_file(path)
     if content_type == "application/zip":
         extractor = ZipExtractor(timeout=timeout)
     else:
         extractor = TarExtractor(timeout=timeout)
 
-    tmp_dir = None
     try:
-        tmp_dir = extractor.from_path(path, extract_dir=extract_dir).tmp_dir
+        ctx = extractor.from_path(path, extract_dir=extract_dir, content_type=content_type)
         content_type = extractor.content_type
-        yield Extraction(tmp_dir, content_type)
+        yield Extraction(ctx.tmp_dir, content_type)
     finally:
-        if tmp_dir:
-            fs.remove(tmp_dir, chmod=True)
+        if extractor.created_tmp_dir:
+            fs.remove(extractor.tmp_dir, chmod=True)

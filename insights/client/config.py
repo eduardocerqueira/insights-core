@@ -4,6 +4,7 @@ import logging
 import optparse
 import copy
 import six
+import sys
 from six.moves import configparser as ConfigParser
 
 from .constants import InsightsConstants as constants
@@ -109,8 +110,7 @@ DEFAULT_OPTS = {
     'display_name': {
         'default': None,
         'opt': ['--display-name'],
-        'help': 'Display name for this system. '
-                'Must be used with --register',
+        'help': 'Set a display name for this system. ',
         'action': 'store'
     },
     'enable_schedule': {
@@ -149,6 +149,10 @@ DEFAULT_OPTS = {
         'help': 'Group to add this system to during registration',
         'action': 'store',
     },
+    'http_timeout': {
+        # non-CLI
+        'default': 10
+    },
     'insecure_connection': {
         # non-CLI
         'default': False
@@ -174,7 +178,8 @@ DEFAULT_OPTS = {
         'default': False,
         'opt': ['--net-debug'],
         'help': 'Log the HTTP method and URL every time a network call is made.',
-        'action': 'store_true'
+        'action': 'store_true',
+        'group': 'debug'
     },
     'no_gpg': {
         # non-CLI
@@ -347,6 +352,11 @@ class InsightsConfig(object):
     Insights client configuration
     '''
     def __init__(self, *args, **kwargs):
+        # this is only used to print configuration errors upon initial load
+        self._print_errors = False
+        if '_print_errors' in kwargs:
+            self._print_errors = kwargs['_print_errors']
+
         self._init_attrs = copy.copy(dir(self))
         self._update_dict(DEFAULT_KVS)
         if args:
@@ -383,9 +393,18 @@ class InsightsConfig(object):
             dict_['gpg'] = False
 
         unknown_opts = set(dict_.keys()).difference(set(DEFAULT_OPTS.keys()))
-        if unknown_opts:
-            raise ValueError(
-                'Unknown options: ' + ','.join(list(unknown_opts)))
+        if unknown_opts and self._print_errors:
+            # only print error once
+            sys.stdout.write(
+                'WARNING: Unknown options: ' +
+                ', '.join(list(unknown_opts)) + '\n')
+            if 'no_schedule' in unknown_opts:
+                sys.stdout.write('WARNING: Config option `no_schedule` has '
+                                 'been deprecated. To disable automatic '
+                                 'scheduling for Red Hat Insights, run '
+                                 '`insights-client --disable-schedule`\n')
+        for u in unknown_opts:
+            dict_.pop(u, None)
         self.__dict__.update(dict_)
         self._imply_options()
         self._validate_options()
@@ -455,8 +474,11 @@ class InsightsConfig(object):
         try:
             parsedconfig.read(fname or self.conf)
         except ConfigParser.Error:
-            logger.error(
-                'ERROR: Could not read configuration file, using defaults')
+            if self._print_errors:
+                sys.stdout.write(
+                    'ERROR: Could not read configuration file, '
+                    'using defaults\n')
+            return
         try:
             # Try to add the insights-client section
             parsedconfig.add_section(constants.app_name)
@@ -466,10 +488,20 @@ class InsightsConfig(object):
             pass
         d = dict(parsedconfig.items(constants.app_name))
         for key in d:
-            if key == 'retries':
-                d[key] = parsedconfig.getint(constants.app_name, key)
-            if key in DEFAULT_BOOLS and isinstance(d[key], six.string_types):
-                d[key] = parsedconfig.getboolean(constants.app_name, key)
+            try:
+                if key == 'retries':
+                    d[key] = parsedconfig.getint(constants.app_name, key)
+                if key == 'http_timeout':
+                    d[key] = parsedconfig.getfloat(constants.app_name, key)
+                if key in DEFAULT_BOOLS and isinstance(
+                        d[key], six.string_types):
+                    d[key] = parsedconfig.getboolean(constants.app_name, key)
+            except ValueError as e:
+                if self._print_errors:
+                    sys.stdout.write(
+                        'ERROR: {0}.\nCould not read configuration file, '
+                        'using defaults\n'.format(e))
+                return
         self._update_dict(d)
 
     def load_all(self):
@@ -490,7 +522,7 @@ class InsightsConfig(object):
         if self.obfuscate_hostname and not self.obfuscate:
             raise ValueError(
                 'Option `obfuscate_hostname` requires `obfuscate`')
-        if self.analyze_image_id is not None and len(self.analyze_image_id < 12):
+        if self.analyze_image_id is not None and len(self.analyze_image_id) < 12:
             raise ValueError(
                 'Image/Container ID must be at least twelve characters long.')
         if self.from_stdin and self.from_file:
@@ -511,18 +543,20 @@ class InsightsConfig(object):
         '''
         self.no_upload = self.no_upload or self.to_stdout or self.offline
         self.auto_update = self.auto_update and not self.offline
-        self.analyze_container = (self.analyze_container or
-                                  self.analyze_file or
-                                  self.analyze_mountpoint or
-                                  self.analyze_image_id)
+        if (self.analyze_container or
+           self.analyze_file or
+           self.analyze_mountpoint or
+           self.analyze_image_id):
+            self.analyze_container = True
         self.to_stdout = (self.to_stdout or
                           self.from_stdin or
                           self.from_file)
         self.to_json = ((self.to_json or self.analyze_container) and
                         not self.to_stdout)
+        self.register = (self.register or self.reregister) and not self.offline
 
 
 if __name__ == '__main__':
-    config = InsightsConfig()
+    config = InsightsConfig(_print_errors=True)
     config.load_all()
     print(config)

@@ -36,13 +36,15 @@ with open(this_file) as f:
 
 
 class Stuff(SpecSet):
-    smpl_file = simple_file(this_file)
+    smpl_file = simple_file(this_file, filterable=True)
     many = glob_file(here + "/*.py")
     smpl_cmd = simple_command("/usr/bin/uptime")
-    smpl_cmd_list_of_lists = simple_command("echo -n ' hello '")
+    smpl_cmd_list_of_lists = simple_command("echo -n ' hello '", filterable=True)
 
 
-stage = dr.new_component_type(executor=dr.broker_executor)
+class stage(dr.ComponentType):
+    def invoke(self, broker):
+        return self.component(broker)
 
 
 @stage(Stuff.smpl_file, Stuff.many, Stuff.smpl_cmd, Stuff.smpl_cmd_list_of_lists)

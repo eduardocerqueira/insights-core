@@ -10,6 +10,8 @@ pipeline {
             }
           }
           steps {
+            echo "Installing Insights..."
+            sh 'pip install --user -e .[testing]'
             echo "Testing with Pytest..."
             sh 'pytest'
           }
@@ -21,12 +23,20 @@ pipeline {
             }
           }
           steps {
-            echo "Installing Insights..."
-            sh 'pip install --user -e .'
             echo "Testing with Pytest..."
-            sh 'pytest'
-            echo "Testing with flake8..."   
-            sh 'flake8'
+            sh """
+                virtualenv .testenv
+                source .testenv/bin/activate
+                pip install -e .[testing]
+                pytest
+            """
+            echo "Testing with Linter..."
+            sh """
+                virtualenv .lintenv
+                source .lintenv/bin/activate
+                pip install -e .[linting]
+                flake8
+            """
           }
         }
         stage('Build RHEL7 Python 3.6') {
@@ -36,12 +46,20 @@ pipeline {
             }
           }
           steps {
-            echo "Installing Insights..."
-            sh '/bin/python36 -m pip install --user -e .'
             echo "Testing with Pytest..."
-            sh '/bin/python36 -m pytest'
-            echo "Testing with flake8..."   
-            sh '/bin/python36 -m flake8'
+            sh """
+                /bin/python36 -m venv .testenv
+                source .testenv/bin/activate
+                pip install -e .[testing]
+                pytest
+            """
+            echo "Testing with Linter..."
+            sh """
+                /bin/python36 -m venv .lintenv
+                source .lintenv/bin/activate
+                pip install -e .[linting]
+                flake8
+            """
           }
         }
       }
@@ -58,10 +76,13 @@ pipeline {
         }
       }
       steps {
-        echo "Installing Insights..."
-        sh 'pip install --user -e .'
         echo "Building Docs..."
-        sh 'sphinx-build -W -b html -qa -E docs docs/_build/html'
+        sh """
+            virtualenv .docenv
+            source .docenv/bin/activate
+            pip install -e .[docs]
+            sphinx-build -W -b html -qa -E docs docs/_build/html
+        """
       } 
     }
     stage('Nofity Github - Docs Check Passed') {
