@@ -8,7 +8,7 @@ class InsightsConstants(object):
     auth_method = 'BASIC'
     package_path = os.path.dirname(
         os.path.dirname(os.path.abspath(__file__)))
-    sleep_time = 300
+    sleep_time = 180
     command_blacklist = ('rm', 'kill', 'reboot', 'shutdown')
     default_conf_dir = '/etc/insights-client'
     default_conf_file = os.path.join(default_conf_dir, 'insights-client.conf')
@@ -20,8 +20,6 @@ class InsightsConstants(object):
     base_url = ''
     collection_rules_file = os.path.join(default_conf_dir, '.cache.json')
     collection_fallback_file = os.path.join(default_conf_dir, '.fallback.json')
-    collection_remove_file_name = 'remove.conf'
-    collection_remove_file = os.path.join(default_conf_dir, collection_remove_file_name)
     unregistered_files = [os.path.join(default_conf_dir, '.unregistered'),
                           os.path.join(simple_find_replace_dir, '.unregistered')]
     registered_files = [os.path.join(default_conf_dir, '.registered'),
@@ -31,7 +29,7 @@ class InsightsConstants(object):
     machine_id_file = os.path.join(default_conf_dir, 'machine-id')
     default_target = {'type': 'host', 'name': ''}
     default_branch_info = {'remote_branch': -1, 'remote_leaf': -1}
-    default_cmd_timeout = 600  # default command execution to ten minutes, prevents long running commands that will hang
+    default_cmd_timeout = 120  # default command execution to two minutes, prevents long running commands that will hang
     default_egg_gpg_key = os.path.join(default_conf_dir, 'insights-core.gpg')
     core_etag_file = os.path.join(default_conf_dir, '.insights-core.etag')
     core_gpg_sig_etag_file = os.path.join(default_conf_dir, '.insights-core-gpg-sig.etag')
@@ -44,3 +42,4 @@ class InsightsConstants(object):
     insights_core_gpg_sig_newest = os.path.join(insights_core_lib_dir, 'newest.egg.asc')
     sig_kill_ok = 100
     sig_kill_bad = 101
+    cached_branch_info = os.path.join(default_conf_dir, '.branch_info')

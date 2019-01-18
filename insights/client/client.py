@@ -8,6 +8,7 @@ import os
 import time
 import shutil
 import six
+import atexit
 
 from .utilities import (generate_machine_id,
                         write_to_disk,
@@ -76,6 +77,8 @@ def configure_level(config):
 
     net_debug_level = logging.INFO if config.net_debug else logging.ERROR
     logging.getLogger('network').setLevel(net_debug_level)
+    if not config.verbose:
+        logging.getLogger('insights.core.dr').setLevel(logging.WARNING)
 
 
 def set_up_logging(config):
@@ -352,6 +355,7 @@ def collect(config, pconn):
 
         archive = InsightsArchive(compressor=config.compressor,
                                   target_name=target['name'])
+        atexit.register(_delete_archive_internal, config, archive)
 
         # determine the target type and begin collection
         # we infer "docker_image" SPEC analysis for certain types
@@ -384,11 +388,11 @@ def get_connection(config):
     return InsightsConnection(config)
 
 
-def upload(config, pconn, tar_file, collection_duration=None):
+def upload(config, pconn, tar_file, content_type, collection_duration=None):
     logger.info('Uploading Insights data.')
     api_response = None
     for tries in range(config.retries):
-        upload = pconn.upload_archive(tar_file, collection_duration)
+        upload = pconn.upload_archive(tar_file, content_type, collection_duration)
 
         if upload.status_code in (200, 201):
             api_response = json.loads(upload.text)
@@ -396,7 +400,10 @@ def upload(config, pconn, tar_file, collection_duration=None):
 
             # Write to last upload file
             with open(constants.last_upload_results_file, 'w') as handler:
-                handler.write(upload.text)
+                if six.PY3:
+                    handler.write(upload.text)
+                else:
+                    handler.write(upload.text.encode('utf-8'))
             write_to_disk(constants.lastupload_file)
 
             account_number = config.account_number
@@ -406,7 +413,9 @@ def upload(config, pconn, tar_file, collection_duration=None):
             else:
                 logger.info("Successfully uploaded report for %s." % (machine_id))
             break
-
+        elif upload.status_code == 202:
+            machine_id = generate_machine_id()
+            logger.info("Successfully uploaded report for %s." % (machine_id))
         elif upload.status_code == 412:
             pconn.handle_fail_rcs(upload)
             break
@@ -421,6 +430,16 @@ def upload(config, pconn, tar_file, collection_duration=None):
                 logger.error("All attempts to upload have failed!")
                 logger.error("Please see %s for additional information", config.logging_file)
     return api_response
+
+
+def _delete_archive_internal(config, archive):
+    '''
+    Only used during built-in collection.
+    Delete archive and tmp dirs on unexpected exit.
+    '''
+    if not config.keep_archive:
+        archive.delete_tmp_dir()
+        archive.delete_archive_file()
 
 
 def delete_archive(path, delete_parent_dir):

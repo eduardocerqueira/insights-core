@@ -4,7 +4,9 @@ import pytest
 import time
 
 from insights.client import InsightsClient
+from insights.client.archive import InsightsArchive
 from insights.client.config import InsightsConfig
+from insights.client.client import _delete_archive_internal
 from insights import package_info
 from insights.client.constants import InsightsConstants as constants
 from insights.client.utilities import generate_machine_id
@@ -262,7 +264,8 @@ def test_reg_check_unregistered_unreachable():
 @patch('insights.client.client.constants.sleep_time', 0)
 @patch('insights.client.client.InsightsConnection.upload_archive',
        return_value=Mock(status_code=500))
-def test_upload_500_retry(upload_archive):
+@patch('insights.client.os.path.exists', return_value=True)
+def test_upload_500_retry(_, upload_archive):
 
     # Hack to prevent client from parsing args to py.test
     tmp = sys.argv
@@ -284,7 +287,8 @@ def test_upload_500_retry(upload_archive):
 @patch('insights.client.client.InsightsConnection.handle_fail_rcs')
 @patch('insights.client.client.InsightsConnection.upload_archive',
        return_value=Mock(status_code=412))
-def test_upload_412_no_retry(upload_archive, handle_fail_rcs):
+@patch('insights.client.os.path.exists', return_value=True)
+def test_upload_412_no_retry(_, upload_archive, handle_fail_rcs):
 
     # Hack to prevent client from parsing args to py.test
     tmp = sys.argv
@@ -304,7 +308,8 @@ def test_upload_412_no_retry(upload_archive, handle_fail_rcs):
 @patch('insights.client.client.InsightsConnection.upload_archive',
        return_value=Mock(**{"status_code": 412,
                             "json.return_value": {"unregistered_at": "now", "message": "msg"}}))
-def test_upload_412_write_unregistered_file(upload_archive, write_unregistered_file):
+@patch('insights.client.os.path.exists', return_value=True)
+def test_upload_412_write_unregistered_file(_, upload_archive, write_unregistered_file):
 
     # Hack to prevent client from parsing args to py.test
     tmp = sys.argv
@@ -319,3 +324,16 @@ def test_upload_412_write_unregistered_file(upload_archive, write_unregistered_f
         write_unregistered_file.assert_called_once_with(unregistered_at)
     finally:
         sys.argv = tmp
+
+
+def test_delete_archive_internal():
+    config = InsightsConfig(keep_archive=True)
+    arch = InsightsArchive()
+    _delete_archive_internal(config, arch)
+    assert os.path.exists(arch.tmp_dir)
+    assert os.path.exists(arch.archive_tmp_dir)
+
+    config.keep_archive = False
+    _delete_archive_internal(config, arch)
+    assert not os.path.exists(arch.tmp_dir)
+    assert not os.path.exists(arch.archive_tmp_dir)

@@ -1,7 +1,6 @@
 import six
 import sys
 from insights import dr, rule
-from insights.core.evaluators import SingleEvaluator
 
 
 _FORMATTERS = {}
@@ -52,8 +51,9 @@ class FormatterAdapter(six.with_metaclass(FormatterAdapterMeta)):
 
 
 class Formatter(object):
-    def __init__(self, broker):
+    def __init__(self, broker, stream=sys.stdout):
         self.broker = broker
+        self.stream = stream
 
     def __enter__(self):
         self.preprocess()
@@ -67,18 +67,6 @@ class Formatter(object):
 
     def postprocess(self):
         pass
-
-
-class EvaluatorFormatter(Formatter):
-    def preprocess(self):
-        self.evaluator = SingleEvaluator(broker=self.broker)
-
-    def postprocess(self):
-        self.evaluator.post_process()
-        print(self.dump(self.evaluator.get_response()))
-
-    def dump(self, data):
-        raise NotImplemented("Subclasses must implement the dump method.")
 
 
 class EvaluatorFormatterAdapter(FormatterAdapter):
@@ -107,8 +95,11 @@ try:
     from jinja2 import Template
 
     def get_content(obj, key):
-        mod = sys.modules[obj.__module__]
-        c = getattr(mod, "CONTENT", None)
+        c = dr.get_delegate(obj).content
+        if c is None:
+            mod = sys.modules[obj.__module__]
+            c = getattr(mod, "CONTENT", None)
+
         if c:
             if isinstance(c, dict):
                 if key:
